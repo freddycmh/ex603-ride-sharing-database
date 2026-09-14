@@ -1,0 +1,4 @@
+.env
+.pgpass
+*.key
+.DS_Store
