@@ -3,10 +3,10 @@
 A PostgreSQL database modelling the trips, riders, drivers and driver-reward programme of a
 city-scale ride sharing platform.
 
-**Author:** Freddy Mok Ho
+**Author:** *&lt;your name&gt;*
 **Course:** EX 603 — Course Project, Units 1–6
 **Theme:** 1 — Ride Sharing
-**Status:** Unit 1 complete (design). Unit 2 will add the DDL.
+**Status:** Unit 2 complete (schema built and running). Unit 3 will add queries.
 
 ---
 
@@ -47,13 +47,13 @@ them and that no answer can be corrupted by a row that should never have been st
 
 Five relations, following the course's five-role structure:
 
-| Role     | Relation              | What it holds                                                                                                     |
-| -------- | --------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| actor    | `riders`              | One row per rider account.                                                                                        |
-| producer | `drivers`             | One row per approved driver. Carries the activity flag (`is_active`) and the numeric filter attribute (`rating`). |
-| event    | `trips`               | One row per requested ride. Carries the metric (`fare_amount`) and the timestamps.                                |
-| catalog  | `driver_badges`       | The achievement catalogue.                                                                                        |
-| junction | `driver_badge_awards` | Composite-keyed M:N link between drivers and badges.                                                              |
+| Role | Relation | What it holds |
+| --- | --- | --- |
+| actor | `riders` | One row per rider account. |
+| producer | `drivers` | One row per approved driver. Carries the activity flag (`is_active`) and the numeric filter attribute (`rating`). |
+| event | `trips` | One row per requested ride. Carries the metric (`fare_amount`) and the timestamps. |
+| catalog | `driver_badges` | The achievement catalogue. |
+| junction | `driver_badge_awards` | Composite-keyed M:N link between drivers and badges. |
 
 ### Key design decisions
 
@@ -62,28 +62,49 @@ Five relations, following the course's five-role structure:
   awards.
 - **`RESTRICT` on the trip foreign keys, `CASCADE` on the award foreign keys.** Trips are
   financial records that must outlive an account; awards are meaningless without their parent.
-  The same table takes different actions in different children.
+  The same parent table takes different actions in different children, because the children
+  differ in what they are worth.
+- **`SET NULL` on the recursive referral key.** `CASCADE` there would delete a referrer's
+  entire downstream referral tree; `RESTRICT` would make popular referrers undeletable.
 - **Money and ratings as `NUMERIC`, never floating point**, because both are summed and
   compared against exact thresholds.
-- **Status cannot lie about its own row.** A check constraint ties `status = 'completed'` to
-  the presence of a fare, an end time, and a driver, in both directions.
+- **Status cannot lie about its own row.** Three constraints tie the fare, the end time and
+  the driver to `status` *individually*. A single equivalence over all three looks equivalent
+  and is not — it lets an uncompleted trip carry a charge. Testing caught it; the story is in
+  [`/analysis/unit2.md`](analysis/unit2.md).
+- **`duration_min` is generated and stored**, because it is a pure function of two columns in
+  its own row and so cannot drift. `drivers.rating` depends on another table and is
+  deliberately left to the application.
 
 Full detail: [`/schema/schema-definition.md`](schema/schema-definition.md) and
 [`/schema/constraints.md`](schema/constraints.md).
+
+### Running the schema
+
+```bash
+createdb ex603_ridesharing
+psql -d ex603_ridesharing -f schema/schema.sql
+```
+
+The script is idempotent — it drops in reverse creation order before it creates, so it can be
+run repeatedly with no manual cleanup. Creation order is `riders` → `drivers` →
+`driver_badges` → `trips` → `driver_badge_awards`.
 
 ---
 
 ## Repository structure
 
-| Path                                                          | Contents                                                                               |
-| ------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| [`/schema/schema-definition.md`](schema/schema-definition.md) | Task 1.1 — all five relation schemas, attribute domains, primary and candidate keys.   |
-| [`/schema/erd.png`](schema/erd.png)                           | Task 1.2 — the exported ERD.                                                           |
-| [`/schema/erd.dot`](schema/erd.dot)                           | Editable Graphviz source for the ERD.                                                  |
-| [`/schema/constraints.md`](schema/constraints.md)             | Task 1.3 — every constraint with its justification, including each `ON DELETE` choice. |
-| [`/analysis/unit1.md`](analysis/unit1.md)                     | Task 1.4 — modelling justification and reflection.                                     |
-| `/queries/unit3` … `unit6`                                    | Empty until Unit 3.                                                                    |
-| `/screenshots`                                                | Empty until Unit 2.                                                                    |
+| Path | Contents |
+| --- | --- |
+| [`/schema/schema.sql`](schema/schema.sql) | Task 2.1 — the complete DDL, commented, runs top to bottom. |
+| [`/schema/schema-definition.md`](schema/schema-definition.md) | Task 1.1 — all five relation schemas, attribute domains, primary and candidate keys. |
+| [`/schema/erd.png`](schema/erd.png) | Task 1.2 — the exported ERD, updated in Unit 2. |
+| [`/schema/erd.dot`](schema/erd.dot) | Editable Graphviz source for the ERD. |
+| [`/schema/constraints.md`](schema/constraints.md) | Task 1.3 — every constraint with its justification, including each `ON DELETE` choice. |
+| [`/analysis/unit1.md`](analysis/unit1.md) | Task 1.4 — modelling justification and reflection. |
+| [`/analysis/unit2.md`](analysis/unit2.md) | Task 2.2 — creation order, constraints table, and the CHECK narrative. |
+| `/screenshots` | Execution evidence. |
+| `/queries/unit3` … `unit6` | Empty until Unit 3. |
 
 ---
 
@@ -102,14 +123,14 @@ Requires [Graphviz](https://graphviz.org/download/).
 
 ## Roadmap
 
-| Unit  | Deliverable                                       |
-| ----- | ------------------------------------------------- |
-| **1** | Relational design, ERD, integrity constraints. ✅ |
-| 2     | DDL implementation and seed data.                 |
-| 3     | Single-table queries.                             |
-| 4     | Joins across the five relations.                  |
-| 5     | Aggregation and analysis.                         |
-| 6     | Written analysis and recorded video presentation. |
+| Unit | Deliverable |
+| --- | --- |
+| 1 | Relational design, ERD, integrity constraints. ✅ |
+| **2** | DDL implementation. ✅ |
+| 3 | Single-table queries. |
+| 4 | Joins across the five relations. |
+| 5 | Aggregation and analysis. |
+| 6 | Written analysis and recorded video presentation. |
 
 ---
 
