@@ -6,7 +6,7 @@ city-scale ride sharing platform.
 **Author:** *&lt;your name&gt;*
 **Course:** EX 603 — Course Project, Units 1–6
 **Theme:** 1 — Ride Sharing
-**Status:** Unit 2 complete (schema built and running). Unit 3 will add queries.
+**Status:** Unit 3 complete (dashboard audit). Unit 4 will add joins.
 
 ---
 
@@ -103,8 +103,41 @@ run repeatedly with no manual cleanup. Creation order is `riders` → `drivers` 
 | [`/schema/constraints.md`](schema/constraints.md) | Task 1.3 — every constraint with its justification, including each `ON DELETE` choice. |
 | [`/analysis/unit1.md`](analysis/unit1.md) | Task 1.4 — modelling justification and reflection. |
 | [`/analysis/unit2.md`](analysis/unit2.md) | Task 2.2 — creation order, constraints table, and the CHECK narrative. |
+| [`/queries/unit3/`](queries/unit3) | Unit 3 — the audit queries. See the catalogue below. |
+| [`/analysis/unit3-finding.md`](analysis/unit3-finding.md) | Task 3.4 — the memo to the dashboard team. |
 | `/screenshots` | Execution evidence. |
-| `/queries/unit3` … `unit6` | Empty until Unit 3. |
+| `/queries/unit4` … `unit6` | Empty until Unit 4. |
+
+---
+
+## Query catalogue
+
+### Unit 3 — auditing a disputed dashboard figure
+
+A dashboard reported that roughly half of all trips ended in a rider no-show, and a
+quarterly driver bonus pool was frozen on that number. It is wrong. The true rate is 6%.
+
+These queries run against the course-provided dataset (`ex603_data`), **not** the schema in
+`/schema` — Unit 3 ships its own data.
+
+| File | Business question it answers |
+| --- | --- |
+| [`q3_1.sql`](queries/unit3/q3_1.sql) | What is actually in this data? Who are the active, highly rated drivers; what outcomes can a trip have; how many trips carry no cancellation reason, and why? |
+| [`q3_2.sql`](queries/unit3/q3_2.sql) | How did a query that runs without error report 44% when the answer is 6%? Reproduces both bugs and repairs them. |
+| [`q3_3.sql`](queries/unit3/q3_3.sql) | Which riders were involved in the disputed trips? Answered three equivalent ways, with a proof the results are identical and a demonstration of where that equivalence collapses. |
+
+**The finding in one line:** the dashboard's filter used `<>` against a column that is NULL
+for 166 of 200 trips. Those rows failed both the filter *and* its apparent opposite, so the
+denominator silently collapsed from 193 to 27. The numerator never moved — there have always
+been exactly 12 no-shows.
+
+```bash
+createdb ex603_data
+psql -d ex603_data -f rideshare.sql
+psql -d ex603_data -f queries/unit3/q3_1.sql
+psql -d ex603_data -f queries/unit3/q3_2.sql   # no ON_ERROR_STOP: one query must fail
+psql -d ex603_data -f queries/unit3/q3_3.sql
+```
 
 ---
 
@@ -126,8 +159,8 @@ Requires [Graphviz](https://graphviz.org/download/).
 | Unit | Deliverable |
 | --- | --- |
 | 1 | Relational design, ERD, integrity constraints. ✅ |
-| **2** | DDL implementation. ✅ |
-| 3 | Single-table queries. |
+| 2 | DDL implementation. ✅ |
+| **3** | Single-table queries and the dashboard audit. ✅ |
 | 4 | Joins across the five relations. |
 | 5 | Aggregation and analysis. |
 | 6 | Written analysis and recorded video presentation. |
