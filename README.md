@@ -6,7 +6,7 @@ city-scale ride sharing platform.
 **Author:** *&lt;your name&gt;*
 **Course:** EX 603 — Course Project, Units 1–6
 **Theme:** 1 — Ride Sharing
-**Status:** Unit 3 complete (dashboard audit). Unit 4 will add joins.
+**Status:** Unit 4 complete (aggregation and outliers). Unit 5 next.
 
 ---
 
@@ -104,9 +104,12 @@ run repeatedly with no manual cleanup. Creation order is `riders` → `drivers` 
 | [`/analysis/unit1.md`](analysis/unit1.md) | Task 1.4 — modelling justification and reflection. |
 | [`/analysis/unit2.md`](analysis/unit2.md) | Task 2.2 — creation order, constraints table, and the CHECK narrative. |
 | [`/queries/unit3/`](queries/unit3) | Unit 3 — the audit queries. See the catalogue below. |
+| [`/queries/unit4/`](queries/unit4) | Unit 4 — aggregation and the producer breakdown. |
+| [`/analysis/unit4.md`](analysis/unit4.md) | Unit 4 write-ups and reflection. |
+| [`/analysis/unit4-finding.md`](analysis/unit4-finding.md) | Task 4.3 — the breakdown for leadership. |
 | [`/analysis/unit3-finding.md`](analysis/unit3-finding.md) | Task 3.4 — the memo to the dashboard team. |
 | `/screenshots` | Execution evidence. |
-| `/queries/unit4` … `unit6` | Empty until Unit 4. |
+| `/queries/unit5` … `unit6` | Empty until Unit 5. |
 
 ---
 
@@ -139,6 +142,29 @@ psql -d ex603_data -f queries/unit3/q3_2.sql   # no ON_ERROR_STOP: one query mus
 psql -d ex603_data -f queries/unit3/q3_3.sql
 ```
 
+### Unit 4 — measuring the platform and finding the outliers
+
+With the rate corrected, leadership asked the follow-up: what *is* the failure rate, and which
+drivers drive it? Same dataset (`ex603_data`), aggregate functions rather than row filters.
+
+| File | Business question it answers |
+| --- | --- |
+| [`q4_1.sql`](queries/unit4/q4_1.sql) | What does the platform look like in aggregate, and how does it vary by driver and region? Covers the baseline statistics, per-driver volume and rates, a volume threshold with `HAVING`, and a two-dimension breakdown. |
+| [`q4_2.sql`](queries/unit4/q4_2.sql) | Three things the basic groupings cannot do: total and failure counts in one pass (`CASE` inside the aggregate), regional subtotals plus a platform grand total (`ROLLUP` with detail rows suppressed), and a two-step `WITH` pipeline that builds a baseline for high-volume drivers. |
+
+**The finding in one line:** the true rate is 6.0%, and only two drivers (2 and 3) have more
+than one no-show between them — but the two drivers most worth asking about are 14 and 15,
+who are active, have taken zero trips, and therefore cannot appear in any per-driver
+breakdown computed from the trip table.
+
+```bash
+psql -d ex603_data -f queries/unit4/q4_1.sql
+psql -d ex603_data -f queries/unit4/q4_2.sql
+```
+
+Write-ups: [`/analysis/unit4.md`](analysis/unit4.md) ·
+Leadership breakdown: [`/analysis/unit4-finding.md`](analysis/unit4-finding.md)
+
 ---
 
 ## Regenerating the ERD
@@ -160,8 +186,8 @@ Requires [Graphviz](https://graphviz.org/download/).
 | --- | --- |
 | 1 | Relational design, ERD, integrity constraints. ✅ |
 | 2 | DDL implementation. ✅ |
-| **3** | Single-table queries and the dashboard audit. ✅ |
-| 4 | Joins across the five relations. |
+| 3 | Single-table queries and the dashboard audit. ✅ |
+| **4** | Aggregation, grouping, and the producer breakdown. ✅ |
 | 5 | Aggregation and analysis. |
 | 6 | Written analysis and recorded video presentation. |
 
