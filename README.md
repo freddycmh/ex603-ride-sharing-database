@@ -6,7 +6,7 @@ city-scale ride sharing platform.
 **Author:** *&lt;your name&gt;*
 **Course:** EX 603 — Course Project, Units 1–6
 **Theme:** 1 — Ride Sharing
-**Status:** Unit 4 complete (aggregation and outliers). Unit 5 next.
+**Status:** Unit 5 complete (joins and the missing drivers). Unit 6 next.
 
 ---
 
@@ -107,9 +107,12 @@ run repeatedly with no manual cleanup. Creation order is `riders` → `drivers` 
 | [`/queries/unit4/`](queries/unit4) | Unit 4 — aggregation and the producer breakdown. |
 | [`/analysis/unit4.md`](analysis/unit4.md) | Unit 4 write-ups and reflection. |
 | [`/analysis/unit4-finding.md`](analysis/unit4-finding.md) | Task 4.3 — the breakdown for leadership. |
+| [`/queries/unit5/`](queries/unit5) | Unit 5 — joins, outer joins and query plans. |
+| [`/analysis/unit5.md`](analysis/unit5.md) | Unit 5 write-ups and reflection. |
+| [`/analysis/unit5-finding.md`](analysis/unit5-finding.md) | Task 5.4 — the recommendation memo. |
 | [`/analysis/unit3-finding.md`](analysis/unit3-finding.md) | Task 3.4 — the memo to the dashboard team. |
 | `/screenshots` | Execution evidence. |
-| `/queries/unit5` … `unit6` | Empty until Unit 5. |
+| `/queries/unit6` | Empty until Unit 6. |
 
 ---
 
@@ -165,6 +168,31 @@ psql -d ex603_data -f queries/unit4/q4_2.sql
 Write-ups: [`/analysis/unit4.md`](analysis/unit4.md) ·
 Leadership breakdown: [`/analysis/unit4-finding.md`](analysis/unit4-finding.md)
 
+### Unit 5 — joins, and the drivers no aggregate could see
+
+Unit 4 ended with a gap: two drivers were active with zero trips, and no query grouped on the
+trips table could show them. Joins close that gap and put attributes to the outliers.
+
+| File | Business question it answers |
+| --- | --- |
+| [`q5_1.sql`](queries/unit5/q5_1.sql) | Who are the people behind each trip, do the problem drivers share a credential, and how do drivers compare with others in their own city? Three-table join, junction traversal, and a self join. |
+| [`q5_2.sql`](queries/unit5/q5_2.sql) | Which drivers does an inner join silently drop, and how do we find drivers with no trips at all? LEFT, RIGHT and FULL OUTER joins, plus `NOT EXISTS` and `EXCEPT`. |
+| [`q5_3.sql`](queries/unit5/q5_3.sql) | How does PostgreSQL execute a three-table join, and what would make it choose differently? `CROSS JOIN` arithmetic and `EXPLAIN`. |
+
+**The finding in one line:** an inner join excludes exactly 2 of 15 drivers — 14 and 15, both
+active, both with zero trips — and nothing in its output discloses the omission. The Night Owl
+badge that drivers 2 and 3 share looked like an explanation and was tested and discarded: the
+late hours the badge describes have a *lower* no-show rate than daytime.
+
+```bash
+psql -d ex603_data -f queries/unit5/q5_1.sql
+psql -d ex603_data -f queries/unit5/q5_2.sql
+psql -d ex603_data -f queries/unit5/q5_3.sql   # runs ANALYZE; gathers statistics, changes no data
+```
+
+Write-ups: [`/analysis/unit5.md`](analysis/unit5.md) ·
+Recommendations: [`/analysis/unit5-finding.md`](analysis/unit5-finding.md)
+
 ---
 
 ## Regenerating the ERD
@@ -187,8 +215,8 @@ Requires [Graphviz](https://graphviz.org/download/).
 | 1 | Relational design, ERD, integrity constraints. ✅ |
 | 2 | DDL implementation. ✅ |
 | 3 | Single-table queries and the dashboard audit. ✅ |
-| **4** | Aggregation, grouping, and the producer breakdown. ✅ |
-| 5 | Aggregation and analysis. |
+| 4 | Aggregation, grouping, and the producer breakdown. ✅ |
+| **5** | Joins, outer joins, and query performance. ✅ |
 | 6 | Written analysis and recorded video presentation. |
 
 ---
