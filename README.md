@@ -1,12 +1,12 @@
-# Ride Sharing Platform — Relational Database Design
+# Ride Sharing Platform — Database Design and Analysis
 
-A PostgreSQL database modelling the trips, riders, drivers and driver-reward programme of a
-city-scale ride sharing platform.
+**A six-unit SQL project that starts with a relational design and ends by auditing a reported
+statistic that was wrong by a factor of seven.**
 
-**Author:** *&lt;your name&gt;*
+**Author:** Freddy Mok Ho
 **Course:** EX 603 — Course Project, Units 1–6
 **Theme:** 1 — Ride Sharing
-**Status:** Unit 5 complete (joins and the missing drivers). Unit 6 next.
+**Status:** Complete
 
 ---
 
@@ -18,77 +18,253 @@ populations meet on the platform. **Riders** open the app and request a trip. **
 the supply side — vetted, licensed, each associated with one vehicle, each carrying a rolling
 quality rating and a flag indicating whether they are currently permitted to accept work.
 Every request either becomes a completed journey or is cancelled, and either way it is
-recorded as a row in the **trips** table, which is the high-volume heart of the system. A
-mature platform in a single large city generates hundreds of thousands of these rows a month,
-which is why almost every design decision in this repository is made with that table's read
-and write patterns in mind.
+recorded as a row in **trips**, the high-volume table at the centre of the system.
 
 Alongside the marketplace runs a driver rewards programme. **Driver badges** form a small
-catalogue of achievements — "Night Owl", "500 Trips", "Five-Star Streak" — and drivers earn
-them over time. A driver may hold many badges and a badge may be held by many drivers, so the
+catalogue of achievements — "Night Owl", "Safe Driving", "Airport Pro" — that drivers earn
+over time. A driver may hold many badges and a badge may be held by many drivers, so the
 relationship is many-to-many and is resolved through the **driver badge awards** junction,
 whose composite primary key makes it impossible to award the same badge twice.
 
-The design exists to answer questions the business actually asks. On the operations side:
-which trips are in progress right now, and which requests are still waiting for a driver? On
-the finance side: what did the platform earn last month, by city and by day, and how much of
-that is attributable to surge pricing? On the supply side: which drivers are active, how do
-their ratings distribute, and does holding a particular badge correlate with higher earnings
-per trip? On the demand side: when are the peak hours, how does weekday demand differ from
-weekend, and what proportion of requests are abandoned before a driver is matched? Units 3
-to 6 build the query catalogue that answers these; Unit 1 makes sure the data can support
-them and that no answer can be corrupted by a row that should never have been stored.
+The analysis exists to answer questions the business actually asks, and the project is
+structured around one that went wrong. A dashboard reported that roughly half of all trips
+ended in a rider no-show. A quarterly driver bonus pool was frozen on the strength of it.
+Nobody had read the query. Units 3 to 6 work through the consequences: what the true rate is,
+which drivers contribute to it, who the analysis cannot see, and whether it is improving.
+The answers are 6%, two drivers, two more drivers who never appear in any report, and
+*we cannot tell yet* — and each one took a query to establish and a check to believe.
 
 ---
 
-## Schema
+## Database overview
 
 ![Entity Relationship Diagram for the ride sharing database](schema/erd.png)
 
-Five relations, following the course's five-role structure:
+Two databases appear in this repository, and the distinction matters when reading the queries.
 
-| Role | Relation | What it holds |
+**`/schema`** holds my own design from Units 1 and 2 — the ERD above, the relation schemas,
+the integrity constraints, and [`schema.sql`](schema/schema.sql), a DDL script that builds it
+and runs cleanly twice in a row.
+
+**`ex603_data`** is the course-provided dataset introduced in Unit 3, and it is what every
+query from Unit 3 onward runs against. Its structure is close to my design but not identical.
+All analysis below refers to this dataset.
+
+The five tables that carry the analysis:
+
+| Table | Role | What it holds |
 | --- | --- | --- |
-| actor | `riders` | One row per rider account. |
-| producer | `drivers` | One row per approved driver. Carries the activity flag (`is_active`) and the numeric filter attribute (`rating`). |
-| event | `trips` | One row per requested ride. Carries the metric (`fare_amount`) and the timestamps. |
-| catalog | `driver_badges` | The achievement catalogue. |
-| junction | `driver_badge_awards` | Composite-keyed M:N link between drivers and badges. |
+| `riders` | actor | 30 riders. Includes a self-referencing `referred_by` key. |
+| `drivers` | producer | 15 drivers, with `is_active` and `avg_rating`. Only 13 ever appear in `trips`. |
+| `trips` | event | 200 trips — the fact table. Carries `fare_amount`, timestamps, `trip_status` and a nullable `cancellation_reason`. |
+| `driver_badges` | catalog | 5 badges. |
+| `driver_badge_awards` | junction | 25 awards, composite-keyed on `(driver_id, badge_id)`. |
 
-### Key design decisions
+Two properties of `trips` drive most of what follows. **`cancellation_reason` is NULL for 166
+of 200 rows** — correctly, because a trip that completed was never cancelled — and that single
+fact is what broke the original dashboard. And **cancelled trips carry a fare of 0.00**, which
+is correct but drags the reported average fare down by 17%.
 
-- **Surrogate primary keys everywhere except the junction**, which is keyed on
-  `(driver_id, badge_id)` because that composite is itself the rule preventing duplicate
-  awards.
-- **`RESTRICT` on the trip foreign keys, `CASCADE` on the award foreign keys.** Trips are
-  financial records that must outlive an account; awards are meaningless without their parent.
-  The same parent table takes different actions in different children, because the children
-  differ in what they are worth.
-- **`SET NULL` on the recursive referral key.** `CASCADE` there would delete a referrer's
-  entire downstream referral tree; `RESTRICT` would make popular referrers undeletable.
-- **Money and ratings as `NUMERIC`, never floating point**, because both are summed and
-  compared against exact thresholds.
-- **Status cannot lie about its own row.** Three constraints tie the fare, the end time and
-  the driver to `status` *individually*. A single equivalence over all three looks equivalent
-  and is not — it lets an uncompleted trip carry a charge. Testing caught it; the story is in
-  [`/analysis/unit2.md`](analysis/unit2.md).
-- **`duration_min` is generated and stored**, because it is a pure function of two columns in
-  its own row and so cannot drift. `drivers.rating` depends on another table and is
-  deliberately left to the application.
+---
 
-Full detail: [`/schema/schema-definition.md`](schema/schema-definition.md) and
-[`/schema/constraints.md`](schema/constraints.md).
+## Query catalogue
 
-### Running the schema
+Every `.sql` file carries a header stating the task it answers and the question in plain
+language. Each runs against `ex603_data` without editing.
+
+### Unit 3 — auditing the disputed figure
+
+| File | Business question |
+| --- | --- |
+| [`q3_1.sql`](queries/unit3/q3_1.sql) | What is actually in this data? Who are the active, highly-rated drivers; what outcomes can a trip have; how many trips carry no cancellation reason, and why? |
+| [`q3_2.sql`](queries/unit3/q3_2.sql) | How did a query that runs without error report 44% when the answer is 6%? Reproduces both bugs and repairs them. |
+| [`q3_3.sql`](queries/unit3/q3_3.sql) | Which riders were involved in the disputed trips? Answered three equivalent ways, with proof the results are identical and a demonstration of where that equivalence collapses. |
+
+### Unit 4 — measuring the platform
+
+| File | Business question |
+| --- | --- |
+| [`q4_1.sql`](queries/unit4/q4_1.sql) | What does the platform look like in aggregate, and how does it vary by driver and region? Baseline statistics, per-driver rates, a volume threshold with `HAVING`, and a two-dimension breakdown. |
+| [`q4_2.sql`](queries/unit4/q4_2.sql) | Which drivers drive the failure rate? Conditional aggregation in one pass, regional subtotals with a grand total, and a two-step pipeline establishing a baseline. |
+
+### Unit 5 — joins, and the drivers no aggregate could see
+
+| File | Business question |
+| --- | --- |
+| [`q5_1.sql`](queries/unit5/q5_1.sql) | Who are the people behind each trip, do the problem drivers share a credential, and how do drivers compare with others in their own city? |
+| [`q5_2.sql`](queries/unit5/q5_2.sql) | Which drivers does an inner join silently drop, and how do we find drivers with no trips at all? |
+| [`q5_3.sql`](queries/unit5/q5_3.sql) | How does PostgreSQL execute a three-table join, and what would make it choose differently? |
+
+### Unit 6 — is it getting better?
+
+| File | Business question |
+| --- | --- |
+| [`q6_1.sql`](queries/unit6/q6_1.sql) | Is a trip unusual *for its own driver*, and who should appear higher on a leaderboard when two drivers tie? |
+| [`q6_2.sql`](queries/unit6/q6_2.sql) | Is a driver's earning trending up or down, where does the platform stand against its target, and what does a gap in activity mean? |
+| [`q6_3.sql`](queries/unit6/q6_3.sql) | What are each driver's best trips, and is the no-show rate improving month over month? |
+
+Written analysis accompanies each unit in [`/analysis`](analysis), and each of Units 3–6 ends
+with a memo written for a non-technical reader.
+
+---
+
+## Technical highlights
+
+**1. Three-valued logic, and why `<>` is not the opposite of `=`.**
+The original dashboard filtered with `cancellation_reason <> 'Driver unavailable'`, expecting
+193 of 200 rows. It returned 27. A comparison against NULL yields UNKNOWN, and `WHERE` keeps
+only rows that are TRUE, so the 166 rows with no cancellation reason failed the filter *and*
+its apparent opposite. The repair is `IS DISTINCT FROM`. The proof is a single row of output:
+27 kept + 7 excluded = 34, against a table of 200. ([`q3_2.sql`](queries/unit3/q3_2.sql))
+
+**2. Conditional aggregation instead of two filtered queries.**
+`SUM(CASE WHEN ... THEN 1 ELSE 0 END)` puts the total and the failure count in one pass over
+the table, with no `WHERE` to shrink the denominator. The complement column must sum back to
+the total, which makes the arithmetic checkable inside the same result set. Two separate
+filtered queries have two independent `WHERE` clauses and nothing enforcing that they select
+the same population — which is how the original error happened.
+([`q4_2.sql`](queries/unit4/q4_2.sql))
+
+**3. Outer joins to find what is absent.**
+An inner join from `drivers` to `trips` returns 13 drivers. A left join returns 15. The two
+missing drivers are active and have never taken a trip, so they cannot appear in any
+per-driver analysis built on the event table — and nothing in an inner join's output discloses
+the omission. `NOT EXISTS` and `EXCEPT` both surface them.
+([`q5_2.sql`](queries/unit5/q5_2.sql))
+
+**4. Reading an execution plan rather than guessing at it.**
+`EXPLAIN` on the three-table join shows two nested Hash Joins over three sequential scans,
+despite primary key indexes being available on both dimension tables. Setting
+`enable_hashjoin = off` proves the planner considered and rejected them: the Nested Loop
+alternative costs 24.18 against 9.29. "Add an index" is not a universal fix, and an unused
+index still slows every write. ([`q5_3.sql`](queries/unit5/q5_3.sql))
+
+**5. Window functions to compare a row with its group.**
+`AVG(...) OVER (PARTITION BY driver_id)` writes each driver's average onto all 200 trip rows,
+so a trip can be compared against its own driver's norm without losing the trip. `GROUP BY`
+returns 13 rows and discards 187, after which no per-row question can be asked.
+([`q6_1.sql`](queries/unit6/q6_1.sql))
+
+---
+
+## Findings and recommendations
+
+**1. The reported failure rate was wrong by a factor of seven, and the numerator was never
+the problem.** The dashboard said ~44%; the true rate is **6.0%** — 12 rider no-shows across
+200 trips. There have always been exactly 12. What moved was the denominator, from 193 down
+to 27, because a filter silently discarded every trip that was never cancelled.
+*Recommendation:* reconcile the parts against the total before acting on any figure. If the
+categories on a chart do not sum to the record count, something was discarded.
+
+**2. Two drivers are worth investigating, and two more are worth investigating for the
+opposite reason.** Drivers 2 and 3 are the only two with more than one no-show. Drivers 14
+and 15 are active, have taken zero trips all year, and appear in no report built from the
+trips table. The self join rules out the easy explanations — same cities as busy colleagues,
+comparable ratings, comparable tenure. *Recommendation:* read the five trip records for
+drivers 2 and 3; phone drivers 14 and 15. Neither is an analytics question any more.
+
+**3. The quarterly trend looks like steady improvement and is not.** Grouped by quarter the
+no-show rate falls 7.5% → 6.3% → 5.9% → 4.2%, a 44% annual reduction. It rests on 4, 3, 3 and
+2 incidents. **One additional no-show in Q4 takes it to 6.3% — identical to Q2 — and the
+decline vanishes.** Sliced monthly, the same data supports the opposite conclusion.
+*Recommendation:* do not report a no-show trend or set a target against it. Report the count.
+
+Full memos: [Unit 3](analysis/unit3-finding.md) · [Unit 4](analysis/unit4-finding.md) ·
+[Unit 5](analysis/unit5-finding.md) · [Unit 6](analysis/unit6-finding.md)
+
+---
+
+## Limitations and future improvements
+
+**The dataset is a sample, not a complete record, and that limits every conclusion above.**
+
+200 trips across 13 drivers, 5 cities and 365 days is roughly one trip every other day for
+the entire platform. No real ride-share operation runs at that volume. The consequence shows
+up most clearly in the gap analysis: 9 of 13 drivers have a gap of more than 60 days between
+consecutive trips, and the mean gap is 22 days. Read individually, driver 9's 113-day absence
+looks like someone who stopped working. Read against the fleet, it is what sparse sampling
+looks like. The data cannot distinguish "took no trips" from "took trips that are not in this
+extract".
+
+The same sparsity undermines every rate. Twelve no-show incidents is enough to establish a
+*level* — 6% is solid, because it rests on all 200 trips — and nowhere near enough to
+establish a *direction*. Per-driver rates are built on 1 to 3 events each, and regional rates
+on 1 to 4.
+
+**What would fix it:** the complete trip log rather than an extract. With a full year of real
+volume, the quarterly comparison would have thousands of events behind each rate instead of
+two or three, and a 1.7-point quarterly move would become a question worth asking rather than
+one rider's change of plans.
+
+**Two further things I would want**, neither of which is in this database: driver app session
+history, which would settle whether drivers 14 and 15 were ever offered work; and the rider
+side of each no-show, which would show whether the incidents attributed to drivers 2 and 3
+involve one repeat rider or five unrelated ones. Both questions are currently unanswerable
+with any query.
+
+**What I would do differently.** I would have written the reconciliation check — do the
+category counts sum to the table count — as the first query of Unit 3 rather than discovering
+its necessity by debugging. It takes one line and it catches the entire class of error this
+project is built around. I would also have tested each `CHECK` constraint in Unit 2 against a
+row designed to violate it; one of mine read correctly in English and did not hold in SQL,
+and only running it found that out.
+
+---
+
+## Video presentation
+
+**[Watch the 3–5 minute walkthrough](ADD_YOUR_VIDEO_URL_HERE)**
+
+Covers the platform and the business question, two SQL demonstrations including a
+window-function query, the key findings, and the sampling limitation above.
+
+---
+
+## How to run it
+
+Assumes PostgreSQL 14 or later and nothing else.
+
+**Build my Unit 1–2 schema** (empty tables, no data):
 
 ```bash
 createdb ex603_ridesharing
 psql -d ex603_ridesharing -f schema/schema.sql
 ```
 
-The script is idempotent — it drops in reverse creation order before it creates, so it can be
-run repeatedly with no manual cleanup. Creation order is `riders` → `drivers` →
-`driver_badges` → `trips` → `driver_badge_awards`.
+The script is idempotent — it drops in reverse creation order before creating, so it runs
+repeatedly with no manual cleanup.
+
+**Load the analysis dataset and run the queries:**
+
+```bash
+createdb ex603_data
+psql -d ex603_data -f rideshare.sql        # course-provided dataset
+psql -d ex603_data -c "SELECT COUNT(*) FROM trips;"   # expect 200
+
+psql -d ex603_data -f queries/unit3/q3_1.sql
+psql -d ex603_data -f queries/unit3/q3_2.sql   # no ON_ERROR_STOP: one query must fail
+psql -d ex603_data -f queries/unit3/q3_3.sql
+psql -d ex603_data -f queries/unit4/q4_1.sql
+psql -d ex603_data -f queries/unit4/q4_2.sql
+psql -d ex603_data -f queries/unit5/q5_1.sql
+psql -d ex603_data -f queries/unit5/q5_2.sql
+psql -d ex603_data -f queries/unit5/q5_3.sql   # runs ANALYZE; gathers statistics, changes no data
+psql -d ex603_data -f queries/unit6/q6_1.sql
+psql -d ex603_data -f queries/unit6/q6_2.sql
+psql -d ex603_data -f queries/unit6/q6_3.sql
+```
+
+Two files behave deliberately unusually. **`q3_2.sql` contains a query that must fail** — the
+alias error is the evidence Unit 3 asks for — so do not run it with `-v ON_ERROR_STOP=1`.
+**`q5_3.sql` runs `ANALYZE`** to demonstrate how statistics change a query plan; that gathers
+statistics and modifies no data, and its `enable_hashjoin` toggle is session-scoped and reset
+within the file.
+
+**Regenerate the ERD** (requires [Graphviz](https://graphviz.org/download/)):
+
+```bash
+dot -Tpng -Gdpi=140 schema/erd.dot -o schema/erd.png
+```
 
 ---
 
@@ -96,132 +272,10 @@ run repeatedly with no manual cleanup. Creation order is `riders` → `drivers` 
 
 | Path | Contents |
 | --- | --- |
-| [`/schema/schema.sql`](schema/schema.sql) | Task 2.1 — the complete DDL, commented, runs top to bottom. |
-| [`/schema/schema-definition.md`](schema/schema-definition.md) | Task 1.1 — all five relation schemas, attribute domains, primary and candidate keys. |
-| [`/schema/erd.png`](schema/erd.png) | Task 1.2 — the exported ERD, updated in Unit 2. |
-| [`/schema/erd.dot`](schema/erd.dot) | Editable Graphviz source for the ERD. |
-| [`/schema/constraints.md`](schema/constraints.md) | Task 1.3 — every constraint with its justification, including each `ON DELETE` choice. |
-| [`/analysis/unit1.md`](analysis/unit1.md) | Task 1.4 — modelling justification and reflection. |
-| [`/analysis/unit2.md`](analysis/unit2.md) | Task 2.2 — creation order, constraints table, and the CHECK narrative. |
-| [`/queries/unit3/`](queries/unit3) | Unit 3 — the audit queries. See the catalogue below. |
-| [`/queries/unit4/`](queries/unit4) | Unit 4 — aggregation and the producer breakdown. |
-| [`/analysis/unit4.md`](analysis/unit4.md) | Unit 4 write-ups and reflection. |
-| [`/analysis/unit4-finding.md`](analysis/unit4-finding.md) | Task 4.3 — the breakdown for leadership. |
-| [`/queries/unit5/`](queries/unit5) | Unit 5 — joins, outer joins and query plans. |
-| [`/analysis/unit5.md`](analysis/unit5.md) | Unit 5 write-ups and reflection. |
-| [`/analysis/unit5-finding.md`](analysis/unit5-finding.md) | Task 5.4 — the recommendation memo. |
-| [`/analysis/unit3-finding.md`](analysis/unit3-finding.md) | Task 3.4 — the memo to the dashboard team. |
-| `/screenshots` | Execution evidence. |
-| `/queries/unit6` | Empty until Unit 6. |
-
----
-
-## Query catalogue
-
-### Unit 3 — auditing a disputed dashboard figure
-
-A dashboard reported that roughly half of all trips ended in a rider no-show, and a
-quarterly driver bonus pool was frozen on that number. It is wrong. The true rate is 6%.
-
-These queries run against the course-provided dataset (`ex603_data`), **not** the schema in
-`/schema` — Unit 3 ships its own data.
-
-| File | Business question it answers |
-| --- | --- |
-| [`q3_1.sql`](queries/unit3/q3_1.sql) | What is actually in this data? Who are the active, highly rated drivers; what outcomes can a trip have; how many trips carry no cancellation reason, and why? |
-| [`q3_2.sql`](queries/unit3/q3_2.sql) | How did a query that runs without error report 44% when the answer is 6%? Reproduces both bugs and repairs them. |
-| [`q3_3.sql`](queries/unit3/q3_3.sql) | Which riders were involved in the disputed trips? Answered three equivalent ways, with a proof the results are identical and a demonstration of where that equivalence collapses. |
-
-**The finding in one line:** the dashboard's filter used `<>` against a column that is NULL
-for 166 of 200 trips. Those rows failed both the filter *and* its apparent opposite, so the
-denominator silently collapsed from 193 to 27. The numerator never moved — there have always
-been exactly 12 no-shows.
-
-```bash
-createdb ex603_data
-psql -d ex603_data -f rideshare.sql
-psql -d ex603_data -f queries/unit3/q3_1.sql
-psql -d ex603_data -f queries/unit3/q3_2.sql   # no ON_ERROR_STOP: one query must fail
-psql -d ex603_data -f queries/unit3/q3_3.sql
-```
-
-### Unit 4 — measuring the platform and finding the outliers
-
-With the rate corrected, leadership asked the follow-up: what *is* the failure rate, and which
-drivers drive it? Same dataset (`ex603_data`), aggregate functions rather than row filters.
-
-| File | Business question it answers |
-| --- | --- |
-| [`q4_1.sql`](queries/unit4/q4_1.sql) | What does the platform look like in aggregate, and how does it vary by driver and region? Covers the baseline statistics, per-driver volume and rates, a volume threshold with `HAVING`, and a two-dimension breakdown. |
-| [`q4_2.sql`](queries/unit4/q4_2.sql) | Three things the basic groupings cannot do: total and failure counts in one pass (`CASE` inside the aggregate), regional subtotals plus a platform grand total (`ROLLUP` with detail rows suppressed), and a two-step `WITH` pipeline that builds a baseline for high-volume drivers. |
-
-**The finding in one line:** the true rate is 6.0%, and only two drivers (2 and 3) have more
-than one no-show between them — but the two drivers most worth asking about are 14 and 15,
-who are active, have taken zero trips, and therefore cannot appear in any per-driver
-breakdown computed from the trip table.
-
-```bash
-psql -d ex603_data -f queries/unit4/q4_1.sql
-psql -d ex603_data -f queries/unit4/q4_2.sql
-```
-
-Write-ups: [`/analysis/unit4.md`](analysis/unit4.md) ·
-Leadership breakdown: [`/analysis/unit4-finding.md`](analysis/unit4-finding.md)
-
-### Unit 5 — joins, and the drivers no aggregate could see
-
-Unit 4 ended with a gap: two drivers were active with zero trips, and no query grouped on the
-trips table could show them. Joins close that gap and put attributes to the outliers.
-
-| File | Business question it answers |
-| --- | --- |
-| [`q5_1.sql`](queries/unit5/q5_1.sql) | Who are the people behind each trip, do the problem drivers share a credential, and how do drivers compare with others in their own city? Three-table join, junction traversal, and a self join. |
-| [`q5_2.sql`](queries/unit5/q5_2.sql) | Which drivers does an inner join silently drop, and how do we find drivers with no trips at all? LEFT, RIGHT and FULL OUTER joins, plus `NOT EXISTS` and `EXCEPT`. |
-| [`q5_3.sql`](queries/unit5/q5_3.sql) | How does PostgreSQL execute a three-table join, and what would make it choose differently? `CROSS JOIN` arithmetic and `EXPLAIN`. |
-
-**The finding in one line:** an inner join excludes exactly 2 of 15 drivers — 14 and 15, both
-active, both with zero trips — and nothing in its output discloses the omission. The Night Owl
-badge that drivers 2 and 3 share looked like an explanation and was tested and discarded: the
-late hours the badge describes have a *lower* no-show rate than daytime.
-
-```bash
-psql -d ex603_data -f queries/unit5/q5_1.sql
-psql -d ex603_data -f queries/unit5/q5_2.sql
-psql -d ex603_data -f queries/unit5/q5_3.sql   # runs ANALYZE; gathers statistics, changes no data
-```
-
-Write-ups: [`/analysis/unit5.md`](analysis/unit5.md) ·
-Recommendations: [`/analysis/unit5-finding.md`](analysis/unit5-finding.md)
-
----
-
-## Regenerating the ERD
-
-The diagram is generated from source rather than drawn by hand, so it can be revised in later
-units without redrawing:
-
-```bash
-dot -Tpng -Gdpi=140 schema/erd.dot -o schema/erd.png
-```
-
-Requires [Graphviz](https://graphviz.org/download/).
-
----
-
-## Roadmap
-
-| Unit | Deliverable |
-| --- | --- |
-| 1 | Relational design, ERD, integrity constraints. ✅ |
-| 2 | DDL implementation. ✅ |
-| 3 | Single-table queries and the dashboard audit. ✅ |
-| 4 | Aggregation, grouping, and the producer breakdown. ✅ |
-| **5** | Joins, outer joins, and query performance. ✅ |
-| 6 | Written analysis and recorded video presentation. |
-
----
-
-## Notes
+| [`/schema`](schema) | Units 1–2: ERD and source, relation schemas, constraint justifications, and the DDL script. |
+| [`/queries/unit3`](queries/unit3) … [`unit6`](queries/unit6) | One folder per unit, every file commented with the question it answers. |
+| [`/analysis`](analysis) | Written analysis per unit, plus a leadership memo for each of Units 3–6. |
+| [`/screenshots`](screenshots) | Execution evidence, named so each maps to the task it supports. |
 
 No credentials, connection strings, or personal data appear anywhere in this repository,
 including in screenshots and SQL file headers.
